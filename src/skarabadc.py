@@ -44,6 +44,8 @@ class SkarabAdc(object):
         elif self.device_info['tag'] == 'xps:skarab_adc4x3g_14_byp':
             self.yb_type = sd.YB_SKARAB_ADC4X3G_14_BYP
         self.decimation_rate = 4
+        self.enable_resampler = 0
+        self.sample_rate = 0
 
         if initialise:
             # Perform ADC PLL Sync
@@ -111,7 +113,7 @@ class SkarabAdc(object):
         read_byte = self.parent.transport.read_i2c(self.i2c_interface, sd.STM_I2C_DEVICE_ADDRESS, 1)[0]
         return read_byte
 
-    def configure_skarab_adc(self, nyquist_zone, decimation_rate=4):
+    def configure_skarab_adc(self, nyquist_zone, decimation_rate=4, sample_rate=0):
         """
         Configure the SKARAB ADC board in a specific sample mode and for a specific Nyquist zone.
         
@@ -125,7 +127,19 @@ class SkarabAdc(object):
                                     8
                                     16
                                     32
+                                    64
+                                    128
         :type decimation_rate: int
+        :param sample_rate: Sets the sample rate of the SKARAB ADC Yellow Block as follows:
+                                For DDC Mode SKARAB ADC Yellow Block
+                                    sample_rate=SAMPLE_RATE_FULL     (0): 3 GSPS
+                                    sample_rate=SAMPLE_RATE_2G56SPS  (1): 2.56 GSPS
+                                    sample_rate=SAMPLE_RATE_2G048SPS (2): 2.048 GSPS
+                                For Bypass Mode SKARAB ADC Yellow Block
+                                    sample_rate=SAMPLE_RATE_FULL     (0): 2.8 GSPS
+                                    sample_rate=SAMPLE_RATE_2G56SPS  (1): 2.56 GSPS 
+                                    sample_rate=SAMPLE_RATE_2G048SPS (2): 2.048 GSPS
+        :type sample_rate: int
         """
 
         # ---------------------------------------------------------------
@@ -145,32 +159,71 @@ class SkarabAdc(object):
             print(self.device_info['tag'])
             return
         # 1.4 CHECK DECIMATION RATE
-        if not (decimation_rate in (4, 8, 16, 32)):
+        if not (decimation_rate in (4, 8, 16, 32, 64, 128)):
             print("SkarabAdc.configure_skarab_adc ERROR: Invalid decimation rate:")
             print(decimation_rate)
             return
         if (decimation_rate == 32) and not (self.device_info['dec_modes'] == "4,8,16,32"):
             print("SkarabAdc.configure_skarab_adc ERROR: Yellow Block is not configured to support decimate by 32")
             return
+        if (decimation_rate == 64) and not (self.device_info['dec_modes'] == "4,8,16,32,64"):
+            print("SkarabAdc.configure_skarab_adc ERROR: Yellow Block is not configured to support decimate by 64")
+            return
+        if (decimation_rate == 128) and not (self.device_info['dec_modes'] == "4,8,16,32,64,128"):
+            print("SkarabAdc.configure_skarab_adc ERROR: Yellow Block is not configured to support decimate by 128")
+            return
+        # 1.5 CHECK SAMPLE RATE
+        if not (sample_rate in (0, 1, 2)):
+            print("SkarabAdc.configure_skarab_adc ERROR: Invalid sample rate option:")
+            print(sample_rate)
+            return
+        if (sample_rate == 2) and (self.device_info['resamp_en'] == "Disable"):
+            print("SkarabAdc.configure_skarab_adc ERROR: Yellow Block is not configured to support resampler")
+            return
 
-        # --------------------------------------------------------------
-        # 2. SET DECIMATION RATE
-        # --------------------------------------------------------------
+        self.parent.transport.write_i2c(self.i2c_interface, sd.STM_I2C_DEVICE_ADDRESS, sd.ADC_FIRMWARE_MAJOR_VERSION_REG)
+        major_version = self.parent.transport.read_i2c(self.i2c_interface, sd.STM_I2C_DEVICE_ADDRESS, 1)
+
+        self.parent.transport.write_i2c(self.i2c_interface, sd.STM_I2C_DEVICE_ADDRESS, sd.ADC_FIRMWARE_MINOR_VERSION_REG)
+        minor_version = self.parent.transport.read_i2c(self.i2c_interface,sd.STM_I2C_DEVICE_ADDRESS, 1)
+
+	if (sample_rate in (1, 2)) and ((major_version[0] == 1) or ((major_version[0] == 2) and (minor_version[0] < 3))):
+            print("SkarabAdc.configure_skarab_adc ERROR: Requested sample rate only supported in Skarab ADC embedded software version 2.3 or later")
+            return
+	
+
+        # ----------------------------------------------------------------------
+        # 2. SET DECIMATION RATE, SAMPLE RATE AND ENABLE RESAMPLER IF REQUIRED
+        # ----------------------------------------------------------------------
         self.decimation_rate = decimation_rate
+        self.sample_rate = sample_rate
+        if sample_rate == 2:
+            self.enable_resampler = 1
 
         # --------------------------------------------------------------
         # 3. SET SAMPLE MODE
         # --------------------------------------------------------------
         device_tag = self.device_info['tag']
         if device_tag == 'xps:skarab_adc4x3g_14':
-            if   self.decimation_rate == 4:
-                SkarabAdc.write_skarab_adc_register(self, sd.BOARD_SAMPLE_MODE_REG, sd.DDCDEC4_3GSPS_SAMPLE_MODE)
-            elif self.decimation_rate == 8:
-                SkarabAdc.write_skarab_adc_register(self, sd.BOARD_SAMPLE_MODE_REG, sd.DDCDEC8_3GSPS_SAMPLE_MODE)
-            else: # dec 16 or 32
-                SkarabAdc.write_skarab_adc_register(self, sd.BOARD_SAMPLE_MODE_REG, sd.DDCDEC16_3GSPS_SAMPLE_MODE)
+            if sample_rate == 0:
+                if   self.decimation_rate == 4:
+                    SkarabAdc.write_skarab_adc_register(self, sd.BOARD_SAMPLE_MODE_REG, sd.DDCDEC4_3GSPS_SAMPLE_MODE)
+                elif self.decimation_rate == 8:
+                    SkarabAdc.write_skarab_adc_register(self, sd.BOARD_SAMPLE_MODE_REG, sd.DDCDEC8_3GSPS_SAMPLE_MODE)
+                else: # dec 16, 32, 64 or 128
+                    SkarabAdc.write_skarab_adc_register(self, sd.BOARD_SAMPLE_MODE_REG, sd.DDCDEC16_3GSPS_SAMPLE_MODE)
+            else:
+                if   self.decimation_rate == 4:
+                    SkarabAdc.write_skarab_adc_register(self, sd.BOARD_SAMPLE_MODE_REG, sd.DDCDEC4_2G56SPS_SAMPLE_MODE)
+                elif self.decimation_rate == 8:
+                    SkarabAdc.write_skarab_adc_register(self, sd.BOARD_SAMPLE_MODE_REG, sd.DDCDEC8_2G56SPS_SAMPLE_MODE)
+                else: # dec 16, 32, 64 or 128
+                    SkarabAdc.write_skarab_adc_register(self, sd.BOARD_SAMPLE_MODE_REG, sd.DDCDEC16_2G56SPS_SAMPLE_MODE)
         elif device_tag == 'xps:skarab_adc4x3g_14_byp':
-            SkarabAdc.write_skarab_adc_register(self, sd.BOARD_SAMPLE_MODE_REG, sd.FULLBW_2P8GSPS_SAMPLE_MODE)
+            if sample_rate == 0:
+                SkarabAdc.write_skarab_adc_register(self, sd.BOARD_SAMPLE_MODE_REG, sd.FULLBW_2P8GSPS_SAMPLE_MODE)
+            else:
+                SkarabAdc.write_skarab_adc_register(self, sd.BOARD_SAMPLE_MODE_REG, sd.FULLBW_2G56SPS_SAMPLE_MODE)
 
         # --------------------------------------------------------------
         # 4. SET NYQUIST ZONE
@@ -215,7 +268,11 @@ class SkarabAdc(object):
         # --------------------------------------------------
         # 1. VARIABLES
         # --------------------------------------------------
-        adc_sample_rate = 3e9 # NOTE: CURRENTLY HARDCODED
+        adc_sample_rate = 0
+        if self.sample_rate == 0:
+            adc_sample_rate = 3e9
+        else:    
+            adc_sample_rate = 2.56e9
         
         # --------------------------------------------------
         # 2. ARGUMENT ERROR CHECKING
@@ -284,7 +341,7 @@ class SkarabAdc(object):
             SkarabAdc.write_skarab_adc_register(self, sd.DECIMATION_RATE_REG, 4)
         elif self.decimation_rate == 8:
             SkarabAdc.write_skarab_adc_register(self, sd.DECIMATION_RATE_REG, 8)
-        else: # dec 16 or 32
+        else: # dec 16, 32, 64 or 128
             SkarabAdc.write_skarab_adc_register(self, sd.DECIMATION_RATE_REG, 16)
         
         # --------------------------------------------------
@@ -745,16 +802,26 @@ class SkarabAdc(object):
             skarab_adcs[i].parent.transport.write_wishbone(skarab_adcs[i].address+sd.REGADR_WR_MEZZANINE_RESET     , 0)
 
         device_tag = self.device_info['tag']
+        resampler_enable=0
+        if self.enable_resampler == 1:
+            resampler_enable=65536
         if device_tag == 'xps:skarab_adc4x3g_14':
             for i in range(skarab_adc_num):
                 if   self.decimation_rate == 4:
-                    skarab_adcs[i].parent.transport.write_wishbone(skarab_adcs[i].address+sd.REGADR_WR_DECIMATION_RATE, 0)
+                    skarab_adcs[i].parent.transport.write_wishbone(skarab_adcs[i].address+sd.REGADR_WR_DECIMATION_RATE, 0+resampler_enable)
                 elif self.decimation_rate == 8:
-                    skarab_adcs[i].parent.transport.write_wishbone(skarab_adcs[i].address+sd.REGADR_WR_DECIMATION_RATE, 1)
+                    skarab_adcs[i].parent.transport.write_wishbone(skarab_adcs[i].address+sd.REGADR_WR_DECIMATION_RATE, 1+resampler_enable)
                 elif self.decimation_rate == 16:
-                    skarab_adcs[i].parent.transport.write_wishbone(skarab_adcs[i].address+sd.REGADR_WR_DECIMATION_RATE, 2)
-                else: # dec 32
-                    skarab_adcs[i].parent.transport.write_wishbone(skarab_adcs[i].address+sd.REGADR_WR_DECIMATION_RATE, 3)
+                    skarab_adcs[i].parent.transport.write_wishbone(skarab_adcs[i].address+sd.REGADR_WR_DECIMATION_RATE, 2+resampler_enable)
+                elif self.decimation_rate == 32:
+                    skarab_adcs[i].parent.transport.write_wishbone(skarab_adcs[i].address+sd.REGADR_WR_DECIMATION_RATE, 3+resampler_enable)
+                elif self.decimation_rate == 64:
+                    skarab_adcs[i].parent.transport.write_wishbone(skarab_adcs[i].address+sd.REGADR_WR_DECIMATION_RATE, 4+resampler_enable)
+                else: # dec 128
+                    skarab_adcs[i].parent.transport.write_wishbone(skarab_adcs[i].address+sd.REGADR_WR_DECIMATION_RATE, 5+resampler_enable)
+        if device_tag == 'xps:skarab_adc4x3g_14_byp':
+            for i in range(skarab_adc_num):
+                skarab_adcs[i].parent.transport.write_wishbone(skarab_adcs[i].address+sd.REGADR_WR_DECIMATION_RATE, 0+resampler_enable)
 
         # ---------------------------------------------------------------
         # 5. REFERENCE CLOCK CHECK (ALL SKARAB ADCs)
@@ -960,10 +1027,18 @@ class SkarabAdc(object):
         # ---------------------------------------------------------------
         print("Performing ADC status reg check...")
         for i in range(skarab_adc_num):
-            adc0_status_out = (skarab_adcs[i].parent.transport.read_wishbone(skarab_adcs[i].address+sd.REGADR_RD_ADC0_STATUS)) & 0xFFBFFFFF
-            adc1_status_out = (skarab_adcs[i].parent.transport.read_wishbone(skarab_adcs[i].address+sd.REGADR_RD_ADC1_STATUS)) & 0xFFBFFFFF
-            adc2_status_out = (skarab_adcs[i].parent.transport.read_wishbone(skarab_adcs[i].address+sd.REGADR_RD_ADC2_STATUS)) & 0xFFBFFFFF
-            adc3_status_out = (skarab_adcs[i].parent.transport.read_wishbone(skarab_adcs[i].address+sd.REGADR_RD_ADC3_STATUS)) & 0xFFBFFFFF
+            if self.enable_resampler == 1:
+                # IGNORE EMPTY WHEN USING RESAMPLER BECAUSE RUNS AT LOWER OUTPUT SAMPLE RATE
+                adc0_status_out = (skarab_adcs[i].parent.transport.read_wishbone(skarab_adcs[i].address+sd.REGADR_RD_ADC0_STATUS)) & 0xFF9FFFFF
+                adc1_status_out = (skarab_adcs[i].parent.transport.read_wishbone(skarab_adcs[i].address+sd.REGADR_RD_ADC1_STATUS)) & 0xFF9FFFFF
+                adc2_status_out = (skarab_adcs[i].parent.transport.read_wishbone(skarab_adcs[i].address+sd.REGADR_RD_ADC2_STATUS)) & 0xFF9FFFFF
+                adc3_status_out = (skarab_adcs[i].parent.transport.read_wishbone(skarab_adcs[i].address+sd.REGADR_RD_ADC3_STATUS)) & 0xFF9FFFFF
+            else:
+                adc0_status_out = (skarab_adcs[i].parent.transport.read_wishbone(skarab_adcs[i].address+sd.REGADR_RD_ADC0_STATUS)) & 0xFFBFFFFF
+                adc1_status_out = (skarab_adcs[i].parent.transport.read_wishbone(skarab_adcs[i].address+sd.REGADR_RD_ADC1_STATUS)) & 0xFFBFFFFF
+                adc2_status_out = (skarab_adcs[i].parent.transport.read_wishbone(skarab_adcs[i].address+sd.REGADR_RD_ADC2_STATUS)) & 0xFFBFFFFF
+                adc3_status_out = (skarab_adcs[i].parent.transport.read_wishbone(skarab_adcs[i].address+sd.REGADR_RD_ADC3_STATUS)) & 0xFFBFFFFF
+
             if (adc0_status_out != 0xE0000000 or adc1_status_out != 0xE0000000 or adc2_status_out != 0xE0000000 or adc3_status_out != 0xE0000000):                
                 print(str("sync_skarab_adc WARNING: SKARAB ADC " + str(i) +  " status register invalid"))
                 print(str("ADC 0 STATUS REG: " + str(hex(adc0_status_out))))
