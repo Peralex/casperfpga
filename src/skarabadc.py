@@ -163,13 +163,19 @@ class SkarabAdc(object):
             print("SkarabAdc.configure_skarab_adc ERROR: Invalid decimation rate:")
             print(decimation_rate)
             return
-        if (decimation_rate == 32) and not (self.device_info['dec_modes'] == "4,8,16,32"):
+	if (self.device_info['tag'] == 'xps:skarab_adc4x3g_14'):
+            rates = self.device_info['dec_modes'].split(',')
+
+        #if (decimation_rate == 32) and not (self.device_info['dec_modes'] == "4,8,16,32"):
+        if (decimation_rate == 32) and not ('32' in rates):
             print("SkarabAdc.configure_skarab_adc ERROR: Yellow Block is not configured to support decimate by 32")
             return
-        if (decimation_rate == 64) and not (self.device_info['dec_modes'] == "4,8,16,32,64"):
+        #if (decimation_rate == 64) and not (self.device_info['dec_modes'] == "4,8,16,32,64"):
+        if (decimation_rate == 64) and not ('64' in rates):
             print("SkarabAdc.configure_skarab_adc ERROR: Yellow Block is not configured to support decimate by 64")
             return
-        if (decimation_rate == 128) and not (self.device_info['dec_modes'] == "4,8,16,32,64,128"):
+        #if (decimation_rate == 128) and not (self.device_info['dec_modes'] == "4,8,16,32,64,128"):
+        if (decimation_rate == 128) and not ('128' in rates):
             print("SkarabAdc.configure_skarab_adc ERROR: Yellow Block is not configured to support decimate by 128")
             return
         # 1.5 CHECK SAMPLE RATE
@@ -807,7 +813,7 @@ class SkarabAdc(object):
             resampler_enable=65536
         if device_tag == 'xps:skarab_adc4x3g_14':
             for i in range(skarab_adc_num):
-                if   self.decimation_rate == 4:
+		if   self.decimation_rate == 4:
                     skarab_adcs[i].parent.transport.write_wishbone(skarab_adcs[i].address+sd.REGADR_WR_DECIMATION_RATE, 0+resampler_enable)
                 elif self.decimation_rate == 8:
                     skarab_adcs[i].parent.transport.write_wishbone(skarab_adcs[i].address+sd.REGADR_WR_DECIMATION_RATE, 1+resampler_enable)
